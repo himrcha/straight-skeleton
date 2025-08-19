@@ -80,6 +80,61 @@
                 justify-content: space-between;
                 align-items: center;
             }
+
+            .canvas-container {
+                flex: 1;
+                position: relative;
+                overflow: hidden;
+                background: white;
+            }
+            #drawingCanvas {
+                border: none;
+                cursor: crosshair;
+                display: block;
+                background: white;
+            }
+            .status-bar {
+                background: #34495e;
+                color: white;
+                padding: 12px 15px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                font-size: 13px;
+                border-top: 2px solid #2c3e50;
+            }
+
+            .mode-button {
+                /*display: block;*/
+                /*width: 100%;*/
+                /*padding: 12px;*/
+                /*margin: 6px 0;*/
+                background: #3498db;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                cursor: pointer;
+                transition: all 0.3s;
+                font-size: 14px;
+                font-weight: 500;
+            }
+
+            .mode-button:hover {
+                background: #2980b9;
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(52, 152, 219, 0.4);
+            }
+
+            .mode-button.active {
+                background: #e74c3c;
+                box-shadow: 0 0 20px rgba(231, 76, 60, 0.6);
+            }
+
+            .mode-button.disabled {
+                background: #7f8c8d;
+                cursor: not-allowed;
+                opacity: 0.6;
+            }
         </style>
     </head>
     <body>
@@ -91,14 +146,7 @@
         <div class="container">
             <div class="controls">
                 <p>GeoJSON Polygon input</p>
-                <div class="btns">
-                    <button class="sample" data-sample="0">Sample polygon #1</button>
-                    <button class="sample" data-sample="1">Sample polygon #2</button>
-                    <button class="sample" data-sample="2">Sample polygon #3</button>
-                    <button class="sample" data-sample="3">Sample polygon #4</button>
-                    <button class="sample" data-sample="4">Sample polygon #5</button>
-                    <button class="sample" data-sample="5">Sample polygon #6</button>
-                </div>
+
                 <textarea id="input" ></textarea>
                 <div class="btns-bottom">
                     <span>Last update took <span id="time"></span></span>
@@ -112,5 +160,1563 @@
                 <canvas id="canvas3d"></canvas>
             </div>
         </div>
+    <div>
+        <!-- 기본 모드 그룹 -->
+        <div class="mode-group">
+            <h4>기본 모드</h4>
+            <button class="mode-button active" data-mode="0">기본 모드</button>
+            <button class="mode-button" data-mode="1">외벽선 작성</button>
+            <button class="mode-button" data-mode="2">외벽선 삭제</button>
+            <button class="mode-button" data-mode="254">
+                외벽선 삭제 (고급)
+            </button>
+        </div>
+        <div class="canvas-container">
+            <canvas id="drawingCanvas"></canvas>
+        </div>
+
+        <div class="status-bar">
+            <div class="coordinates" id="mouseCoords">X: 0, Y: 0</div>
+            <div class="mode-info" id="currentMode">기본 모드</div>
+            <div id="objectCount">객체 수: 0</div>
+            <div id="zoomLevel">배율: 100%</div>
+            <div id="processingStatus">준비</div>
+        </div>
+    </div>
     </body>
+    <script>
+        class AdvancedCADSystemWithChangeMode {
+            constructor() {
+                this.canvas = document.getElementById("drawingCanvas");
+                this.ctx = this.canvas.getContext("2d");
+
+                // VB ChangeMode 함수의 전역 변수들을 JavaScript로 변환
+                this.global_96 = 0; // VB의 global_96
+                this.global_52 = 0; // VB의 global_52
+                this.global_54 = 0; // VB의 global_54
+                this.isProcessing = false;
+
+                // 메모리 변수들 (VB의 MemVar들을 시뮬레이션)
+                this.MemVar_C1C5F8 = -1; // 현재 선택된 인덱스
+                this.MemVar_C1C5FA = -1; // 상태 플래그
+                this.MemVar_C1C5FC = -1; // 상태 플래그 2
+                this.MemVar_C1C668 = 0; // 히스토리 인덱스
+                this.MemVar_C1C5D8 = 100; // 최대 객체 수
+
+                // 데이터 구조들
+                this.objects = [];
+                this.wallLines = [];
+                this.wallPolygons = [];
+                this.roofData = [];
+                this.selectedObjects = [];
+                this.history = [];
+                this.historyIndex = -1;
+                this.undoBuffer = [];
+
+                // 현재 모드 및 상태
+                this.currentMode = 0;
+                this.currentStep = 1;
+                this.isDrawing = false;
+                this.isPolylineDrawing = false; // 외벽선 연속 그리기 상태
+                this.startPoint = { x: 0, y: 0 };
+                this.endPoint = { x: 0, y: 0 };
+                this.polyStartPoint = null; // 다각형 시작점
+                this.polyLastPoint = null; // 마지막 확정점
+                this.currentPolylineVertices = []; // 진행 중 정점 목록
+
+                // 뷰포트 설정
+                this.zoom = 1;
+                this.panX = 0;
+                this.panY = 0;
+                this.gridSize = 20;
+                this.snapToGrid = true;
+                this.showGrid = true;
+
+                // 외벽선 관련 상태
+                this.MemVar_C1C5E0 = new Array(this.MemVar_C1C5D8).fill(0); // 객체 상태 배열
+                this.MemVar_C1C5C0 = new Array(this.MemVar_C1C5D8).fill(null); // 객체 데이터 배열
+
+                this.initializeCanvas();
+                this.setupEventListeners();
+                this.saveState();
+            }
+
+            initializeCanvas() {
+                this.resizeCanvas();
+                window.addEventListener("resize", () => this.resizeCanvas());
+            }
+
+            resizeCanvas() {
+                const container = this.canvas.parentElement;
+                this.canvas.width = container.clientWidth;
+                this.canvas.height = container.clientHeight;
+                this.redraw();
+            }
+
+            setupEventListeners() {
+                // 모드 버튼 이벤트
+                document.querySelectorAll(".mode-button").forEach((button) => {
+                    button.addEventListener("click", (e) => {
+                        if (e.target.dataset.mode) {
+                            this.changeMode(parseInt(e.target.dataset.mode));
+                        }
+                    });
+                });
+
+                // 단계 버튼 이벤트
+                document.querySelectorAll(".step-button").forEach((button) => {
+                    button.addEventListener("click", (e) => {
+                        if (e.target.dataset.step) {
+                            this.setStep(parseInt(e.target.dataset.step));
+                        }
+                    });
+                });
+
+                // 캔버스 이벤트
+                this.canvas.addEventListener("mousedown", (e) =>
+                    this.handleMouseDown(e)
+                );
+                this.canvas.addEventListener("mousemove", (e) =>
+                    this.handleMouseMove(e)
+                );
+                this.canvas.addEventListener("mouseup", (e) => this.handleMouseUp(e));
+                this.canvas.addEventListener("wheel", (e) => this.handleWheel(e));
+
+                // 키보드 이벤트
+                document.addEventListener("keydown", (e) => this.handleKeyDown(e));
+
+                // 속성 변경 이벤트
+                document
+                    .getElementById("lineWidth")
+                    .addEventListener("input", (e) => {
+                        document.getElementById("lineWidthValue").textContent =
+                            e.target.value + "px";
+                    });
+
+                document.getElementById("gridSize").addEventListener("input", (e) => {
+                    this.gridSize = parseInt(e.target.value);
+                    this.redraw();
+                });
+
+                document
+                    .getElementById("snapToGrid")
+                    .addEventListener("change", (e) => {
+                        this.snapToGrid = e.target.checked;
+                    });
+
+                document
+                    .getElementById("showGrid")
+                    .addEventListener("change", (e) => {
+                        this.showGrid = e.target.checked;
+                        this.redraw();
+                    });
+
+                document
+                    .getElementById("fileInput")
+                    .addEventListener("change", (e) => {
+                        this.handleFileLoad(e);
+                    });
+            }
+
+            // VB의 ChangeMode 함수를 JavaScript로 변환
+            changeMode(index) {
+                console.log(`ChangeMode 호출: ${index}`);
+
+                // VB 코드의 첫 번째 조건문 변환
+                if (this.global_96 === 0) {
+                    this.global_96 = index;
+                }
+
+                // 모든 모드 버튼 비활성화 후 현재 모드 활성화
+                document
+                    .querySelectorAll(".mode-button")
+                    .forEach((btn) => btn.classList.remove("active"));
+                const currentButton = document.querySelector(
+                    `[data-mode="${index}"]`
+                );
+                if (currentButton) {
+                    currentButton.classList.add("active");
+                }
+
+                this.currentMode = index;
+                let var_272 = index; // VB 코드의 var_272 변수
+
+                // VB 코드의 switch 구문을 JavaScript로 변환
+                switch (var_272) {
+                    case 0: // 기본 모드
+                        this.handleMode0();
+                        break;
+
+                    case 1: // 외벽선 작성
+                    case 40: // 특별 모드 (VB의 &H28)
+                        this.handleMode1(index);
+                        break;
+
+                    case 2: // 외벽선 삭제
+                    case 254: // 특별 삭제 모드 (VB의 &HFE)
+                        this.handleMode2(index);
+                        break;
+
+                    case 3: // 외벽 선택
+                        this.handleMode3();
+                        break;
+
+                    case 4: // 코너 선택
+                        this.handleMode4();
+                        break;
+
+                    case 5: // 桁 설정
+                        this.handleMode5();
+                        break;
+
+                    case 6: // 벽 입력
+                        this.handleMode6();
+                        break;
+
+                    case 7: // 고급 모드
+                        this.handleMode7();
+                        break;
+
+                    case 8: // 자동 지붕 생성
+                        this.handleMode8();
+                        break;
+
+                    case 9: // 지붕 편집
+                        this.handleMode9();
+                        break;
+
+                    case 10: // 점 선택
+                        this.handleMode10();
+                        break;
+
+                    case 11: // 보조선 편집
+                    case 12: // 보조선 편집 B
+                    case 13: // 보조선 편집 C
+                        this.handleModeHojosen(var_272);
+                        break;
+
+                    case 18: // 보조선 전체 삭제
+                        this.handleMode18();
+                        break;
+
+                    case 20: // 처리 모드 A (VB의 &H14)
+                    case 236: // 처리 실행 (VB의 &HEC)
+                        this.handleModeProcess(var_272);
+                        break;
+
+                    case 21: // 棟선 이동 (VB의 &H15)
+                        this.handleMode21();
+                        break;
+
+                    default:
+                        this.handleDefaultMode(var_272);
+                        break;
+                }
+
+                // VB 코드의 마지막 부분 - 화면 갱신
+                this.redraw();
+                this.updateUI();
+            }
+
+            // 각 모드별 처리 함수들
+            handleMode0() {
+                this.setModeText("기본 모드");
+                this.canvas.style.cursor = "default";
+                this.showMessage("기본 모드로 전환되었습니다.");
+            }
+
+            handleMode1(index) {
+                this.setModeText("외벽선 작성");
+                this.canvas.style.cursor = "crosshair";
+
+                // VB 코드의 FrameStep 표시 로직
+                this.showFrameStep(true);
+                this.showMessage(
+                    "외벽선 작성 모드입니다. 점들을 클릭하여 외벽선을 그리세요."
+                );
+
+                if (index === 1) {
+                    this.setStep(1);
+                    this.global_96 = index;
+                } else if (index === 40) {
+                    // &H28
+                    this.setStep(1);
+                    this.global_96 = 1;
+                }
+            }
+
+            handleMode2(index) {
+                this.setModeText("외벽선 삭제");
+                this.canvas.style.cursor = "not-allowed";
+
+                // VB 코드의 삭제 확인 로직
+                if (this.MemVar_C1C5F8 < 0) {
+                    this.showMessage("삭제할 객체가 선택되지 않았습니다.");
+                    return;
+                }
+
+                if (this.MemVar_C1C5E0[this.MemVar_C1C5F8] === -1) {
+                    let shouldDelete = false;
+
+                    if (index === 2) {
+                        shouldDelete = confirm("외벽선을 삭제합니다, 좋습니까?");
+                    } else {
+                        shouldDelete = true; // 자동 삭제
+                    }
+
+                    if (shouldDelete) {
+                        this.executeWallLineDeletion();
+                    }
+                }
+            }
+
+            handleMode3() {
+                this.setModeText("외벽 선택 (軒・けらば・壁・片流れ)");
+                this.canvas.style.cursor = "pointer";
+                this.showFrameLine(true);
+                this.showMessage("외벽을 선택하세요.");
+            }
+
+            handleMode4() {
+                this.setModeText("코너 선택");
+                this.canvas.style.cursor = "pointer";
+                this.showFrameKado(true);
+                this.showMessage("코너를 선택하세요.");
+            }
+
+            handleMode5() {
+                this.setModeText("桁上げ・桁下げ 설정");
+                this.canvas.style.cursor = "move";
+                this.showFrameKeta(true);
+                this.showMessage("桁上げ・桁下げ를 설정하세요.");
+            }
+
+            handleMode6() {
+                this.setModeText("벽 입력");
+                this.canvas.style.cursor = "crosshair";
+                this.showFrameKabe(true);
+                this.showMessage("벽을 입력하세요.");
+            }
+
+            handleMode7() {
+                this.setModeText("고급 모드");
+                this.canvas.style.cursor = "default";
+                this.showMessage("고급 모드가 활성화되었습니다.");
+            }
+
+            handleMode8() {
+                this.setModeText("자동 지붕 생성");
+                if (this.MemVar_C1C5F8 === -1) {
+                    this.showMessage("선택된 객체가 없습니다.");
+                    return;
+                }
+
+                if (this.MemVar_C1C5E0[this.MemVar_C1C5F8] === 0) {
+                    this.showMessage("유효한 외벽선이 없습니다.");
+                    return;
+                }
+
+                this.executeAutoRoof();
+            }
+
+            handleMode9() {
+                this.setModeText("지붕 편집 모드");
+                this.canvas.style.cursor = "move";
+                this.showMessage("지붕을 편집할 수 있습니다.");
+            }
+
+            handleMode10() {
+                this.setModeText("점 선택 모드");
+                this.canvas.style.cursor = "crosshair";
+                this.showMessage("점을 선택하세요.");
+            }
+
+            handleModeHojosen(mode) {
+                this.setModeText(`보조선 편집 모드 ${mode - 10}`);
+                this.canvas.style.cursor = "default";
+                this.showMessage(`보조선 편집 모드 ${mode - 10}가 활성화되었습니다.`);
+            }
+
+            handleMode18() {
+                this.setModeText("보조선 전체 삭제");
+
+                // VB 코드의 보조선 전체 삭제 로직
+                const dataObject = this.MemVar_C1C5C0[this.MemVar_C1C5F8];
+                if (dataObject && dataObject.auxiliaryLineCount > 0) {
+                    if (confirm("보조선을 전삭제해도 좋습니까?")) {
+                        this.executeDeleteAllAuxiliaryLines();
+                    }
+                } else {
+                    this.showMessage("삭제할 보조선이 없습니다.");
+                }
+            }
+
+            handleModeProcess(mode) {
+                this.setModeText(mode === 20 ? "처리 모드 A" : "처리 실행");
+
+                // VB 코드의 복잡한 처리 로직 시뮬레이션
+                this.showProgress("처리 중... 잠시만 기다려주세요.");
+
+                setTimeout(() => {
+                    this.executeComplexProcessing(mode);
+                    this.hideProgress();
+                }, 2000);
+            }
+
+            handleMode21() {
+                this.setModeText("棟선 이동");
+                this.canvas.style.cursor = "move";
+                this.showFrameMune(true);
+                this.showMessage("棟선을 이동하세요.");
+            }
+
+            handleDefaultMode(mode) {
+                this.setModeText(`모드 ${mode}`);
+                this.canvas.style.cursor = "default";
+                this.showMessage(`모드 ${mode}가 선택되었습니다.`);
+            }
+
+            // VB 코드의 자동 지붕 생성 기능
+            executeAutoRoof() {
+                if (this.wallLines.length < 3) {
+                    alert("지붕을 생성하려면 최소 3개의 외벽선이 필요합니다.");
+                    return;
+                }
+
+                this.showProgress("AutoRoof 실행 중... 잠시만 기다려주세요.");
+
+                // VB 코드의 파일 출력 로직 시뮬레이션
+                this.createAutoRoofInputFile();
+
+                setTimeout(() => {
+                    this.processAutoRoofGeneration();
+                    this.hideProgress();
+                }, 3000);
+            }
+
+            createAutoRoofInputFile() {
+                // VB의 AutoRoof_InputData_ver001.txt 생성 로직 시뮬레이션
+                const inputData = {
+                    version: "ver001",
+                    wallLines: this.wallLines.map((wall) => ({
+                        startX: wall.startX,
+                        startY: wall.startY,
+                        endX: wall.endX,
+                        endY: wall.endY,
+                        properties: wall.properties || {},
+                    })),
+                    timestamp: new Date().toISOString(),
+                };
+
+                console.log("AutoRoof 입력 데이터 생성:", inputData);
+                this.autoRoofInputData = inputData;
+            }
+
+            processAutoRoofGeneration() {
+                // VB의 AutoRoof.exe 실행 시뮬레이션
+                if (!this.autoRoofInputData) {
+                    this.showMessage("입력 데이터가 없습니다.");
+                    return;
+                }
+
+                // 자동 지붕 생성 알고리즘 (단순화된 버전)
+                const roofPolygon = this.generateRoofFromWalls(this.wallLines);
+
+                if (roofPolygon) {
+                    this.roofData.push({
+                        type: "autoRoof",
+                        polygon: roofPolygon,
+                        color: "#8B4513",
+                        lineWidth: 2,
+                        timestamp: new Date().toISOString(),
+                    });
+
+                    this.objects.push(...this.roofData);
+                    this.showMessage("자동 지붕 생성이 완료되었습니다.");
+                    this.updateObjectCount();
+                    this.redraw();
+                    this.saveState();
+                } else {
+                    this.showMessage("지붕 생성에 실패했습니다.");
+                }
+            }
+
+            generateRoofFromWalls(walls) {
+                if (walls.length < 3) return null;
+
+                // 외벽선들의 중심점 계산
+                const centerX =
+                    walls.reduce(
+                        (sum, wall) => sum + (wall.startX + wall.endX) / 2,
+                        0
+                    ) / walls.length;
+                const centerY =
+                    walls.reduce(
+                        (sum, wall) => sum + (wall.startY + wall.endY) / 2,
+                        0
+                    ) / walls.length;
+
+                // 지붕 다각형 생성 (단순화된 알고리즘)
+                const roofPoints = walls.map((wall) => ({
+                    x: (wall.startX + wall.endX) / 2,
+                    y: (wall.startY + wall.endY) / 2,
+                }));
+
+                return {
+                    center: { x: centerX, y: centerY },
+                    points: roofPoints,
+                };
+            }
+
+            // VB 코드의 외벽선 삭제 실행
+            executeWallLineDeletion() {
+                // VB 코드의 삭제 로직 시뮬레이션
+                const targetIndex = this.MemVar_C1C5F8;
+
+                if (targetIndex >= 0 && targetIndex < this.MemVar_C1C5E0.length) {
+                    // 실행취소 버퍼에 저장
+                    this.saveUndoState();
+
+                    // 해당 인덱스의 객체 삭제
+                    this.MemVar_C1C5E0[targetIndex] = 0;
+
+                    // 관련 객체들도 삭제
+                    this.objects = this.objects.filter(
+                        (obj, index) => index !== targetIndex
+                    );
+                    this.wallLines = this.wallLines.filter(
+                        (wall, index) => index !== targetIndex
+                    );
+
+                    // 히스토리 업데이트
+                    this.MemVar_C1C668 = (this.MemVar_C1C668 + 1) % 10;
+
+                    this.showMessage("외벽선이 삭제되었습니다.");
+                    this.updateObjectCount();
+                    this.redraw();
+                }
+            }
+
+            // VB 코드의 보조선 전체 삭제
+            executeDeleteAllAuxiliaryLines() {
+                this.saveUndoState();
+
+                // 보조선만 필터링하여 삭제
+                this.objects = this.objects.filter(
+                    (obj) => obj.type !== "auxiliaryLine"
+                );
+
+                const currentData = this.MemVar_C1C5C0[this.MemVar_C1C5F8];
+                if (currentData) {
+                    currentData.auxiliaryLineCount = 0;
+                    if (currentData.auxiliaryLines) {
+                        delete currentData.auxiliaryLines;
+                    }
+                }
+
+                this.showMessage("모든 보조선이 삭제되었습니다.");
+                this.updateObjectCount();
+                this.redraw();
+            }
+
+            // VB 코드의 복잡한 처리 로직
+            executeComplexProcessing(mode) {
+                // VB 코드의 복잡한 처리 로직 시뮬레이션
+                console.log(`복잡한 처리 실행: 모드 ${mode}`);
+
+                if (mode === 236) {
+                    // 전체 처리 실행
+                    this.processAllObjects();
+                } else {
+                    // 일반 처리
+                    this.processSelectedObjects();
+                }
+
+                this.showMessage(`모드 ${mode} 처리가 완료되었습니다.`);
+            }
+
+            processAllObjects() {
+                // 모든 객체에 대한 처리
+                this.objects.forEach((obj) => {
+                    if (obj.needsProcessing) {
+                        obj.processed = true;
+                        obj.processedAt = new Date().toISOString();
+                    }
+                });
+            }
+
+            processSelectedObjects() {
+                // 선택된 객체에 대한 처리
+                this.selectedObjects.forEach((obj) => {
+                    obj.processed = true;
+                    obj.processedAt = new Date().toISOString();
+                });
+            }
+
+            // UI 프레임 표시/숨김 함수들
+            showFrameStep(show) {
+                // VB의 FrameStep 표시 로직
+                console.log(`FrameStep 표시: ${show}`);
+            }
+
+            showFrameLine(show) {
+                // VB의 FrameLine 표시 로직
+                console.log(`FrameLine 표시: ${show}`);
+            }
+
+            showFrameKado(show) {
+                // VB의 FrameKado 표시 로직
+                console.log(`FrameKado 표시: ${show}`);
+            }
+
+            showFrameKeta(show) {
+                // VB의 FrameKeta 표시 로직
+                console.log(`FrameKeta 표시: ${show}`);
+            }
+
+            showFrameKabe(show) {
+                // VB의 FrameKabe 표시 로직
+                console.log(`FrameKabe 표시: ${show}`);
+            }
+
+            showFrameMune(show) {
+                // VB의 FrameMune 표시 로직
+                console.log(`FrameMune 표시: ${show}`);
+            }
+
+            // 단계 설정
+            setStep(step) {
+                this.currentStep = step;
+
+                // 모든 단계 버튼 비활성화
+                document
+                    .querySelectorAll(".step-button")
+                    .forEach((btn) => btn.classList.remove("active"));
+
+                // 현재 단계 버튼 활성화
+                const stepButton = document.querySelector(`[data-step="${step}"]`);
+                if (stepButton) {
+                    stepButton.classList.add("active");
+                }
+
+                console.log(`단계 ${step} 설정됨`);
+            }
+
+            // 기존 메서드들
+            setModeText(modeText) {
+                document.getElementById("currentMode").textContent = modeText;
+            }
+
+            showMessage(message) {
+                const progressIndicator =
+                    document.getElementById("progressIndicator");
+                progressIndicator.textContent = message;
+                progressIndicator.style.display = "block";
+
+                setTimeout(() => {
+                    progressIndicator.style.display = "none";
+                }, 4000);
+            }
+
+            showProgress(message) {
+                const progressIndicator =
+                    document.getElementById("progressIndicator");
+                progressIndicator.textContent = message;
+                progressIndicator.style.display = "block";
+                this.isProcessing = true;
+
+                document.getElementById("processingStatus").textContent = "처리 중";
+            }
+
+            hideProgress() {
+                document.getElementById("progressIndicator").style.display = "none";
+                this.isProcessing = false;
+                document.getElementById("processingStatus").textContent = "준비";
+            }
+
+            updateUI() {
+                this.updateObjectCount();
+                document.getElementById(
+                    "zoomLevel"
+                ).textContent = `배율: ${Math.round(this.zoom * 100)}%`;
+            }
+
+            // 마우스 이벤트 처리
+            getMousePos(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                let x = (e.clientX - rect.left - this.panX) / this.zoom;
+                let y = (e.clientY - rect.top - this.panY) / this.zoom;
+
+                if (this.snapToGrid) {
+                    x = Math.round(x / this.gridSize) * this.gridSize;
+                    y = Math.round(y / this.gridSize) * this.gridSize;
+                }
+
+                return { x, y };
+            }
+
+            handleMouseDown(e) {
+                if (this.isProcessing) return;
+
+                const pos = this.getMousePos(e);
+                this.startPoint = pos;
+
+                switch (this.currentMode) {
+                    case 1: // 외벽선 작성
+                        this.handleWallPolylineClick(pos);
+                        break;
+                    case 2: // 외벽선 삭제
+                        this.deleteWallLineAt(pos);
+                        break;
+                    case 3: // 외벽 선택
+                    case 4: // 코너 선택
+                        this.selectObject(pos);
+                        break;
+                    case 6: // 벽 입력
+                        this.isDrawing = true;
+                        this.startWall(pos);
+                        break;
+                }
+            }
+
+            handleMouseMove(e) {
+                const pos = this.getMousePos(e);
+                this.endPoint = pos;
+
+                // 마우스 좌표 표시
+                document.getElementById("mouseCoords").textContent = `X: ${Math.round(
+                    pos.x
+                )}, Y: ${Math.round(pos.y)}`;
+
+                if (
+                    this.currentMode === 1 &&
+                    this.isPolylineDrawing &&
+                    this.polyLastPoint
+                ) {
+                    this.redraw();
+                    this.drawPreviewLineFrom(this.polyLastPoint, pos);
+                }
+            }
+
+            handleMouseUp(e) {
+                // 외벽선 작성은 클릭 기반 처리로 변경 (mouseup에서 별도 처리 없음)
+                if (this.currentMode === 6 && this.isDrawing) {
+                    const pos = this.getMousePos(e);
+                    this.endPoint = pos;
+                    this.createWall();
+                    this.isDrawing = false;
+                    this.saveState();
+                }
+            }
+
+            handleWheel(e) {
+                e.preventDefault();
+                const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                this.zoom *= delta;
+                this.zoom = Math.max(0.1, Math.min(5, this.zoom));
+
+                this.updateUI();
+                this.redraw();
+            }
+
+            handleKeyDown(e) {
+                if (e.ctrlKey) {
+                    switch (e.key) {
+                        case "z":
+                            e.preventDefault();
+                            this.undo();
+                            break;
+                        case "y":
+                            e.preventDefault();
+                            this.redo();
+                            break;
+                        case "s":
+                            e.preventDefault();
+                            this.saveProject();
+                            break;
+                    }
+                }
+
+                if (e.key === "Delete") {
+                    this.deleteSelectedObjects();
+                }
+
+                if (e.key === "Escape") {
+                    this.selectedObjects = [];
+                    this.redraw();
+                }
+            }
+
+
+
+            createWallLine() {
+                const wallLine = {
+                    type: "wallLine",
+                    startX: this.startPoint.x,
+                    startY: this.startPoint.y,
+                    endX: this.endPoint.x,
+                    endY: this.endPoint.y,
+                    color: "#e74c3c",
+                    lineWidth: 3,
+                    timestamp: new Date().toISOString(),
+                };
+
+                this.wallLines.push(wallLine);
+                this.objects.push(wallLine);
+
+                // MemVar 업데이트
+                const newIndex = this.objects.length - 1;
+                if (newIndex < this.MemVar_C1C5D8) {
+                    this.MemVar_C1C5E0[newIndex] = -1; // 활성 상태
+                    this.MemVar_C1C5F8 = newIndex; // 현재 선택
+                }
+
+                this.updateObjectCount();
+                this.redraw();
+            }
+
+            // 외벽선 연속 그리기: 클릭 처리
+            // 기존 함수를 이 코드로 교체
+            handleWallPolylineClick(pos) {
+                const closeTolerance = 8;
+
+                if (!this.isPolylineDrawing) {
+                    // 첫 클릭: 그리기 시작
+                    this.isPolylineDrawing = true;
+                    this.polyStartPoint = { x: pos.x, y: pos.y };
+                    this.polyLastPoint = { x: pos.x, y: pos.y };
+                    this.startPoint = { x: pos.x, y: pos.y };
+                    this.endPoint = { x: pos.x, y: pos.y };
+                    this.currentPolylineVertices = [{ x: pos.x, y: pos.y }];
+                    this.showMessage(
+                        "다음 점을 클릭하여 선을 추가하고, 시작점 근처를 클릭하면 닫힙니다."
+                    );
+                    return;
+                }
+
+                // 진행 중: 시작점으로 돌아와 다각형 닫기
+                if (this.polyStartPoint) {
+                    const dx0 = pos.x - this.polyStartPoint.x;
+                    const dy0 = pos.y - this.polyStartPoint.y;
+                    const distToStart = Math.hypot(dx0, dy0);
+
+                    if (distToStart <= closeTolerance && this.polyLastPoint) {
+                        // 마지막 선분 그리기
+                        this.startPoint = { ...this.polyLastPoint };
+                        this.endPoint = { ...this.polyStartPoint };
+                        this.createWallLine();
+
+                        // --- ✨ 핵심 수정 부분 시작 ✨ ---
+
+                        // 1. 다각형 정점 목록 복사
+                        const vertices = [...this.currentPolylineVertices];
+
+                        // 2. 좌표 순서가 시계 방향인지 확인하고, 아니면 뒤집기
+                        const signedArea = this.calculateSignedArea(vertices);
+                        if (signedArea > 0) { // 양수면 반시계 방향이므로 뒤집음
+                            vertices.reverse();
+                        }
+
+                        // 3. GeoJSON 형식으로 변환
+                        // 첫 점을 마지막에 추가하여 닫힌 폴리곤으로 만듦
+                        const coordinates = vertices.map(v => [v.x, v.y]);
+                        coordinates.push([vertices[0].x, vertices[0].y]);
+
+                        const geoJsonPolygon = {
+                            type: 'Polygon',
+                            coordinates: [coordinates]
+                        };
+
+                        // 4. JSON 문자열로 변환하여 textarea에 표시
+                        const jsonString = JSON.stringify(geoJsonPolygon, null, 4); // 예쁘게 포맷팅
+                        document.getElementById('input').value = jsonString;
+
+                        // --- ✨ 핵심 수정 부분 끝 ✨ ---
+
+                        // 그리기 상태 초기화
+                        this.isPolylineDrawing = false;
+                        this.polyStartPoint = null;
+                        this.polyLastPoint = null;
+                        if (this.currentPolylineVertices.length >= 3) {
+                            this.wallPolygons.push([...this.currentPolylineVertices]);
+                        }
+                        this.currentPolylineVertices = [];
+
+                        this.saveState();
+                        this.redraw();
+                        this.showMessage("외벽선 작성이 완료되었고, 좌표를 GeoJSON으로 변환했습니다.");
+                        return;
+                    }
+                }
+
+                // 새 점 추가
+                if (this.polyLastPoint) {
+                    this.startPoint = { ...this.polyLastPoint };
+                    this.endPoint = { x: pos.x, y: pos.y };
+                    this.createWallLine();
+                    this.polyLastPoint = { x: pos.x, y: pos.y };
+                    this.currentPolylineVertices.push({
+                        x: this.endPoint.x,
+                        y: this.endPoint.y,
+                    });
+                    this.saveState();
+                    this.redraw();
+                }
+            }
+
+            deleteWallLineAt(pos) {
+                const tolerance = 10 / this.zoom;
+
+                for (let i = this.wallLines.length - 1; i >= 0; i--) {
+                    const wall = this.wallLines[i];
+                    if (
+                        this.distanceToLine(
+                            pos,
+                            { x: wall.startX, y: wall.startY },
+                            { x: wall.endX, y: wall.endY }
+                        ) < tolerance
+                    ) {
+                        // 삭제 확인
+                        if (confirm("이 외벽선을 삭제하시겠습니까?")) {
+                            this.wallLines.splice(i, 1);
+                            this.objects = this.objects.filter((obj) => obj !== wall);
+                            this.MemVar_C1C5E0[i] = 0; // 비활성 상태
+
+                            this.updateObjectCount();
+                            this.redraw();
+                            this.saveState();
+                        }
+                        break;
+                    }
+                }
+            }
+
+            startWall(pos) {
+                this.showMessage("벽 끝점을 클릭하세요.");
+            }
+
+            createWall() {
+                const wall = {
+                    type: "wall",
+                    startX: this.startPoint.x,
+                    startY: this.startPoint.y,
+                    endX: this.endPoint.x,
+                    endY: this.endPoint.y,
+                    color: "#34495e",
+                    lineWidth: 5,
+                    timestamp: new Date().toISOString(),
+                };
+
+                this.objects.push(wall);
+                this.updateObjectCount();
+                this.redraw();
+            }
+
+            selectObject(pos) {
+                const tolerance = 10 / this.zoom;
+
+                for (let i = this.objects.length - 1; i >= 0; i--) {
+                    const obj = this.objects[i];
+                    if (this.isPointNearObject(pos, obj, tolerance)) {
+                        this.selectedObjects = [obj];
+                        this.MemVar_C1C5F8 = i; // 선택된 인덱스 업데이트
+                        this.redraw();
+                        this.highlightSelected();
+                        this.showMessage(`${obj.type} 객체가 선택되었습니다.`);
+                        return;
+                    }
+                }
+
+                this.selectedObjects = [];
+                this.MemVar_C1C5F8 = -1;
+                this.redraw();
+            }
+
+            isPointNearObject(point, obj, tolerance) {
+                switch (obj.type) {
+                    case "wallLine":
+                    case "wall":
+                        return (
+                            this.distanceToLine(
+                                point,
+                                { x: obj.startX, y: obj.startY },
+                                { x: obj.endX, y: obj.endY }
+                            ) < tolerance
+                        );
+                    case "autoRoof":
+                        if (obj.polygon && obj.polygon.points) {
+                            const center = obj.polygon.center;
+                            const distance = Math.sqrt(
+                                Math.pow(point.x - center.x, 2) +
+                                Math.pow(point.y - center.y, 2)
+                            );
+                            return distance < tolerance * 5; // 지붕은 더 큰 허용 범위
+                        }
+                        return false;
+                    default:
+                        return false;
+                }
+            }
+
+            distanceToLine(point, lineStart, lineEnd) {
+                const A = point.x - lineStart.x;
+                const B = point.y - lineStart.y;
+                const C = lineEnd.x - lineStart.x;
+                const D = lineEnd.y - lineStart.y;
+
+                const dot = A * C + B * D;
+                const lenSq = C * C + D * D;
+                let param = -1;
+
+                if (lenSq !== 0) {
+                    param = dot / lenSq;
+                }
+
+                let xx, yy;
+
+                if (param < 0) {
+                    xx = lineStart.x;
+                    yy = lineStart.y;
+                } else if (param > 1) {
+                    xx = lineEnd.x;
+                    yy = lineEnd.y;
+                } else {
+                    xx = lineStart.x + param * C;
+                    yy = lineStart.y + param * D;
+                }
+
+                const dx = point.x - xx;
+                const dy = point.y - yy;
+                return Math.sqrt(dx * dx + dy * dy);
+            }
+
+
+
+            // 연속 그리기 미리보기 (마지막점 -> 현재 마우스)
+            drawPreviewLineFrom(fromPoint, toPoint) {
+                const ctx = this.ctx;
+                const p1 = this.worldToScreen(fromPoint.x, fromPoint.y);
+                const p2 = this.worldToScreen(toPoint.x, toPoint.y);
+
+                ctx.save();
+                ctx.strokeStyle = "#3498db";
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 5]);
+
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.stroke();
+
+                // 포인트
+                ctx.setLineDash([]);
+                ctx.fillStyle = "#3498db";
+                ctx.beginPath();
+                ctx.arc(p1.x, p1.y, 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(p2.x, p2.y, 3, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 좌표 라벨
+                const sx = Math.round(fromPoint.x);
+                const sy = Math.round(fromPoint.y);
+                const ex = Math.round(toPoint.x);
+                const ey = Math.round(toPoint.y);
+                const startText = `S(${sx}, ${sy})`;
+                const endText = `E(${ex}, ${ey})`;
+
+                ctx.font = "12px sans-serif";
+                ctx.textAlign = "left";
+                ctx.textBaseline = "bottom";
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = "white";
+                ctx.strokeText(startText, p1.x + 8, p1.y - 6);
+                ctx.strokeText(endText, p2.x + 8, p2.y - 6);
+                ctx.fillStyle = "#111";
+                ctx.fillText(startText, p1.x + 8, p1.y - 6);
+                ctx.fillText(endText, p2.x + 8, p2.y - 6);
+
+                ctx.restore();
+            }
+
+            drawObject(obj) {
+                this.ctx.save();
+                this.ctx.strokeStyle = obj.color || "#000000";
+                this.ctx.lineWidth = obj.lineWidth || 1;
+
+                switch (obj.type) {
+                    case "wallLine":
+                    case "wall":
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(obj.startX, obj.startY);
+                        this.ctx.lineTo(obj.endX, obj.endY);
+                        this.ctx.stroke();
+                        break;
+                    case "centerSideLine":
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(obj.startX, obj.startY);
+                        this.ctx.lineTo(obj.endX, obj.endY);
+                        this.ctx.stroke();
+                        break;
+                    case "roofLine":
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(obj.startX, obj.startY);
+                        this.ctx.lineTo(obj.endX, obj.endY);
+                        this.ctx.stroke();
+                        break;
+                    case "centerSideLine":
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(obj.startX, obj.startY);
+                        this.ctx.lineTo(obj.endX, obj.endY);
+                        this.ctx.stroke();
+                        break;
+                    case "diagonal":
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(obj.startX, obj.startY);
+                        this.ctx.lineTo(obj.endX, obj.endY);
+                        this.ctx.stroke();
+                        break;
+                    case "roofDiagonal":
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(obj.startX, obj.startY);
+                        this.ctx.lineTo(obj.endX, obj.endY);
+                        this.ctx.stroke();
+                        break;
+                    case "ridge":
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(obj.startX, obj.startY);
+                        this.ctx.lineTo(obj.endX, obj.endY);
+                        this.ctx.stroke();
+                        break;
+                    case "dashedGuide":
+                        this.ctx.setLineDash([6, 6]);
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(obj.startX, obj.startY);
+                        this.ctx.lineTo(obj.endX, obj.endY);
+                        this.ctx.stroke();
+                        this.ctx.setLineDash([]);
+                        break;
+                    case "intersectionPoint":
+                        this.ctx.fillStyle = obj.color;
+                        this.ctx.beginPath();
+                        this.ctx.arc(obj.x, obj.y, obj.radius, 0, 2 * Math.PI);
+                        this.ctx.fill();
+                        break;
+                    case "connectionLine":
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(obj.startX, obj.startY);
+                        this.ctx.lineTo(obj.endX, obj.endY);
+                        this.ctx.stroke();
+                        break;
+
+                    case "autoRoof":
+                        if (obj.polygon && obj.polygon.points) {
+                            this.ctx.fillStyle = obj.color;
+                            this.ctx.globalAlpha = 0.7;
+                            this.ctx.beginPath();
+
+                            if (obj.polygon.points.length > 0) {
+                                this.ctx.moveTo(
+                                    obj.polygon.points[0].x,
+                                    obj.polygon.points[0].y
+                                );
+                                for (let i = 1; i < obj.polygon.points.length; i++) {
+                                    this.ctx.lineTo(
+                                        obj.polygon.points[i].x,
+                                        obj.polygon.points[i].y
+                                    );
+                                }
+                                this.ctx.closePath();
+                                this.ctx.fill();
+                                this.ctx.stroke();
+                            }
+                        }
+                        break;
+                }
+
+                this.ctx.restore();
+            }
+
+            // 화면 좌표 변환 (월드 -> 스크린)
+            worldToScreen(x, y) {
+                return {
+                    x: x * this.zoom + this.panX,
+                    y: y * this.zoom + this.panY,
+                };
+            }
+
+            // 외벽선 길이 라벨 그리기 (스크린 고정 크기)
+            drawLengthLabelForLine(x1, y1, x2, y2) {
+                // 선 벡터를 스크린 공간으로 변환
+                const p1 = this.worldToScreen(x1, y1);
+                const p2 = this.worldToScreen(x2, y2);
+
+                const sdx = p2.x - p1.x;
+                const sdy = p2.y - p1.y;
+                const lenScreen = Math.hypot(sdx, sdy);
+                if (lenScreen < 1) return;
+
+                // 월드 길이 계산 (그리드 단위)
+                const lenWorld = Math.hypot(x2 - x1, y2 - y1);
+                const text = `거리: ${Math.round(lenWorld)}`;
+
+                // 중앙점과 법선 방향 (스크린 공간)
+                const mx = (p1.x + p2.x) / 2;
+                const my = (p1.y + p2.y) / 2;
+                const nx = -sdy / lenScreen;
+                const ny = sdx / lenScreen;
+                const offset = 12; // px
+                const tx = mx + nx * offset;
+                const ty = my + ny * offset;
+
+                // 텍스트 그리기 (스크린 고정)
+                const ctx = this.ctx;
+                ctx.save();
+                ctx.font = "12px sans-serif";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = "white";
+                ctx.strokeText(text, tx, ty);
+                ctx.fillStyle = "#111";
+                ctx.fillText(text, tx, ty);
+                ctx.restore();
+            }
+
+            // 모든 외벽선에 길이 라벨 표시
+            drawWallLineLabels() {
+                for (const wall of this.wallLines) {
+                    this.drawLengthLabelForLine(
+                        wall.startX,
+                        wall.startY,
+                        wall.endX,
+                        wall.endY
+                    );
+                }
+            }
+
+            // 모든 외벽선의 시작/끝 좌표 라벨 및 포인트 표시
+            drawWallLineEndpointLabels() {
+                const ctx = this.ctx;
+                ctx.save();
+                ctx.font = "12px sans-serif";
+                ctx.textAlign = "left";
+                ctx.textBaseline = "bottom";
+
+                for (const wall of this.wallLines) {
+                    const p1 = this.worldToScreen(wall.startX, wall.startY);
+                    const p2 = this.worldToScreen(wall.endX, wall.endY);
+
+                    // 포인트 마커
+                    ctx.fillStyle = "#3498db";
+                    ctx.beginPath();
+                    ctx.arc(p1.x, p1.y, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.arc(p2.x, p2.y, 3, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // 텍스트
+                    const sx = Math.round(wall.startX);
+                    const sy = Math.round(wall.startY);
+                    const ex = Math.round(wall.endX);
+                    const ey = Math.round(wall.endY);
+                    const startText = `S(${sx}, ${sy})`;
+                    const endText = `E(${ex}, ${ey})`;
+
+                    // halo
+                    ctx.lineWidth = 4;
+                    ctx.strokeStyle = "white";
+                    ctx.strokeText(startText, p1.x + 8, p1.y - 6);
+                    ctx.strokeText(endText, p2.x + 8, p2.y - 6);
+                    // fill
+                    ctx.fillStyle = "#111";
+                    ctx.fillText(startText, p1.x + 8, p1.y - 6);
+                    ctx.fillText(endText, p2.x + 8, p2.y - 6);
+                }
+
+                ctx.restore();
+            }
+
+            drawGrid() {
+                if (!this.showGrid) return;
+
+                this.ctx.save();
+                this.ctx.strokeStyle = "#ecf0f1";
+                this.ctx.lineWidth = 1;
+
+                const gridSize = this.gridSize * this.zoom;
+                const width = this.canvas.width;
+                const height = this.canvas.height;
+
+                for (let x = this.panX % gridSize; x < width; x += gridSize) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(x, 0);
+                    this.ctx.lineTo(x, height);
+                    this.ctx.stroke();
+                }
+
+                for (let y = this.panY % gridSize; y < height; y += gridSize) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(0, y);
+                    this.ctx.lineTo(width, y);
+                    this.ctx.stroke();
+                }
+
+                this.ctx.restore();
+            }
+
+            redraw() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+                this.drawGrid();
+
+                this.ctx.save();
+                this.ctx.scale(this.zoom, this.zoom);
+                this.ctx.translate(this.panX / this.zoom, this.panY / this.zoom);
+
+                this.objects.forEach((obj) => this.drawObject(obj));
+
+                this.ctx.restore();
+
+                // 외벽선 길이 라벨은 화면 좌표(비스케일)로 그린다
+                this.drawWallLineLabels();
+                // 외벽선의 시작/끝 좌표 라벨 및 포인트
+                this.drawWallLineEndpointLabels();
+            }
+
+            highlightSelected() {
+                this.ctx.save();
+                this.ctx.strokeStyle = "#f39c12";
+                this.ctx.lineWidth = 4;
+                this.ctx.setLineDash([8, 4]);
+
+                this.selectedObjects.forEach((obj) => {
+                    this.drawObject(obj);
+                });
+
+                this.ctx.restore();
+            }
+
+            updateObjectCount() {
+                document.getElementById(
+                    "objectCount"
+                ).textContent = `객체 수: ${this.objects.length}`;
+            }
+
+
+
+            // 실행취소/다시실행
+            saveState() {
+                this.history = this.history.slice(0, this.historyIndex + 1);
+                this.history.push(
+                    JSON.stringify({
+                        objects: this.objects,
+                        wallLines: this.wallLines,
+                        roofData: this.roofData,
+                        memVars: {
+                            C1C5F8: this.MemVar_C1C5F8,
+                            C1C5E0: [...this.MemVar_C1C5E0],
+                            C1C668: this.MemVar_C1C668,
+                        },
+                    })
+                );
+                this.historyIndex++;
+
+                if (this.history.length > 50) {
+                    this.history.shift();
+                    this.historyIndex--;
+                }
+            }
+
+            saveUndoState() {
+                this.saveState();
+            }
+
+            undo() {
+                if (this.historyIndex > 0) {
+                    this.historyIndex--;
+                    const state = JSON.parse(this.history[this.historyIndex]);
+
+                    this.objects = state.objects;
+                    this.wallLines = state.wallLines;
+                    this.roofData = state.roofData;
+                    this.MemVar_C1C5F8 = state.memVars.C1C5F8;
+                    this.MemVar_C1C5E0 = [...state.memVars.C1C5E0];
+                    this.MemVar_C1C668 = state.memVars.C1C5E0;
+
+                    // 외벽선 작성 모드에서 실행취소 시 시작점을 이전 직선의 끝점으로 이동
+                    if (
+                        this.currentMode === "wallLine" &&
+                        this.isPolylineDrawing &&
+                        this.wallLines.length > 0
+                    ) {
+                        const lastWallLine = this.wallLines[this.wallLines.length - 1];
+                        this.polyStartPoint = {
+                            x: lastWallLine.endX,
+                            y: lastWallLine.endY,
+                        };
+                        this.polyLastPoint = {
+                            x: lastWallLine.endX,
+                            y: lastWallLine.endY,
+                        };
+                    }
+
+                    this.updateObjectCount();
+                    this.redraw();
+                    this.showMessage("실행취소가 완료되었습니다.");
+                }
+            }
+
+            redo() {
+                if (this.historyIndex < this.history.length - 1) {
+                    this.historyIndex++;
+                    const state = JSON.parse(this.history[this.historyIndex]);
+
+                    this.objects = state.objects;
+                    this.wallLines = state.wallLines;
+                    this.roofData = state.roofData;
+                    this.MemVar_C1C5F8 = state.memVars.C1C5F8;
+                    this.MemVar_C1C5E0 = [...state.memVars.C1C5E0];
+                    this.MemVar_C1C668 = state.memVars.C1C668;
+
+                    this.updateObjectCount();
+                    this.redraw();
+                    this.showMessage("다시실행이 완료되었습니다.");
+                }
+            }
+
+
+            deleteSelectedObjects() {
+                if (this.selectedObjects.length === 0) return;
+
+                this.saveUndoState();
+
+                this.selectedObjects.forEach((selectedObj) => {
+                    const index = this.objects.indexOf(selectedObj);
+                    if (index > -1) {
+                        this.objects.splice(index, 1);
+                        this.MemVar_C1C5E0[index] = 0; // 비활성화
+                    }
+
+                    const wallIndex = this.wallLines.indexOf(selectedObj);
+                    if (wallIndex > -1) {
+                        this.wallLines.splice(wallIndex, 1);
+                    }
+                });
+
+                this.selectedObjects = [];
+                this.MemVar_C1C5F8 = -1;
+                this.updateObjectCount();
+                this.redraw();
+                this.saveState();
+            }
+
+            // 파일 관리
+            saveProject() {
+                const data = {
+                    version: "2.0",
+                    objects: this.objects,
+                    wallLines: this.wallLines,
+                    roofData: this.roofData,
+                    memoryVariables: {
+                        C1C5F8: this.MemVar_C1C5F8,
+                        C1C5E0: this.MemVar_C1C5E0,
+                        C1C668: this.MemVar_C1C668,
+                        global_96: this.global_96,
+                    },
+                    settings: {
+                        zoom: this.zoom,
+                        panX: this.panX,
+                        panY: this.panY,
+                        gridSize: this.gridSize,
+                        currentMode: this.currentMode,
+                    },
+                    meta: {
+                        created: new Date().toISOString(),
+                        cadVersion: "VB-JS-Convert-2.0",
+                    },
+                };
+
+                const dataStr = JSON.stringify(data, null, 2);
+                const dataBlob = new Blob([dataStr], { type: "application/json" });
+
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(dataBlob);
+                link.download = `cad-project-${new Date()
+                    .toISOString()
+                    .slice(0, 10)}.json`;
+                link.click();
+
+                this.showMessage("프로젝트가 저장되었습니다.");
+            }
+
+
+
+            handleFileLoad(e) {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+
+                        this.objects = data.objects || [];
+                        this.wallLines = data.wallLines || [];
+                        this.roofData = data.roofData || [];
+
+                        if (data.memoryVariables) {
+                            this.MemVar_C1C5F8 = data.memoryVariables.C1C5F8 || -1;
+                            this.MemVar_C1C5E0 =
+                                data.memoryVariables.C1C5E0 ||
+                                new Array(this.MemVar_C1C5D8).fill(0);
+                            this.MemVar_C1C668 = data.memoryVariables.C1C668 || 0;
+                            this.global_96 = data.memoryVariables.global_96 || 0;
+                        }
+
+                        if (data.settings) {
+                            this.zoom = data.settings.zoom || 1;
+                            this.panX = data.settings.panX || 0;
+                            this.panY = data.settings.panY || 0;
+                            this.gridSize = data.settings.gridSize || 20;
+                            if (data.settings.currentMode !== undefined) {
+                                this.changeMode(data.settings.currentMode);
+                            }
+                        }
+
+                        this.updateObjectCount();
+                        this.updateUI();
+                        this.redraw();
+                        this.saveState();
+                        this.showMessage("프로젝트가 로드되었습니다.");
+                    } catch (error) {
+                        alert("파일을 로드할 수 없습니다: " + error.message);
+                    }
+                };
+                reader.readAsText(file);
+            }
+
+
+            // 클래스 내부에 추가
+            calculateSignedArea(vertices) {
+                let area = 0;
+                for (let i = 0; i < vertices.length; i++) {
+                    const p1 = vertices[i];
+                    const p2 = vertices[(i + 1) % vertices.length];
+                    // Shoelace formula
+                    area += (p2.x - p1.x) * (p2.y + p1.y);
+                }
+                return area / 2;
+            }
+        }
+
+        // CAD 시스템 초기화
+        let cadSystem;
+        window.addEventListener("DOMContentLoaded", () => {
+            cadSystem = new AdvancedCADSystemWithChangeMode();
+            console.log("고급 CAD 시스템이 초기화되었습니다.");
+        });
+    </script>
 </html>
